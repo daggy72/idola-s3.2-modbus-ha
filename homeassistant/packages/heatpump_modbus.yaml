@@ -1,0 +1,194 @@
+# IDOLA S 3.2 (SCP05) over Modbus TCP via a Waveshare gateway.
+# Put in config/packages/ and enable packages in configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+# Replace the host. Entity ids may differ slightly on your install: check
+# Developer tools > States for sensor.heatpump_* after the first start.
+
+modbus:
+  - name: heatpump
+    type: tcp
+    host: 192.168.x.x
+    port: 502
+    delay: 2
+    timeout: 5
+    sensors:
+      # Raw words, used by the write helpers below
+      - name: HeatPump Power Flags Raw
+        unique_id: heatpump_power_flags_raw
+        address: 0
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+      - name: HeatPump Setpoints Raw
+        unique_id: heatpump_setpoints_raw
+        address: 2
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+      # Settings
+      - name: HeatPump Mode Request
+        unique_id: heatpump_mode_request
+        address: 1
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+      - name: HeatPump DHW Setpoint
+        unique_id: heatpump_dhw_setpoint
+        address: 4
+        slave: 1
+        input_type: holding
+        data_type: int16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 30
+      - name: HeatPump Function Flags Raw
+        unique_id: heatpump_function_flags_raw
+        address: 5
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 60
+      - name: HeatPump Curve Select Raw
+        unique_id: heatpump_curve_select_raw
+        address: 6
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 60
+      # Telemetry
+      - name: HeatPump Compressor Frequency
+        unique_id: heatpump_compressor_frequency
+        address: 100
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        unit_of_measurement: Hz
+        scan_interval: 30
+      - name: HeatPump Operating Mode
+        unique_id: heatpump_operating_mode
+        address: 101
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+      - name: HeatPump Return Temperature
+        unique_id: heatpump_return_temperature
+        address: 104
+        slave: 1
+        input_type: holding
+        data_type: int16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      - name: HeatPump Supply Temperature
+        unique_id: heatpump_supply_temperature
+        address: 105
+        slave: 1
+        input_type: holding
+        data_type: int16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      - name: HeatPump Outdoor Temperature
+        unique_id: heatpump_outdoor_temperature
+        address: 107
+        slave: 1
+        input_type: holding
+        data_type: int16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      - name: HeatPump Fault Code
+        unique_id: heatpump_fault_code
+        address: 124
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+      - name: HeatPump Status Raw
+        unique_id: heatpump_status_raw
+        address: 128
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+      - name: HeatPump Water Flow
+        unique_id: heatpump_water_flow
+        address: 138
+        slave: 1
+        input_type: holding
+        data_type: uint16
+        scale: 0.01
+        precision: 2
+        unit_of_measurement: "m³/h"
+        scan_interval: 30
+
+template:
+  - number:
+      - name: HeatPump Zone1 Setpoint
+        unique_id: heatpump_zone1_setpoint
+        unit_of_measurement: "°C"
+        min: 25
+        max: 40
+        step: 1
+        # Low byte of reg 2 = Zone 1
+        state: >
+          {{ (states('sensor.heatpump_setpoints_raw') | int(0)) | bitwise_and(255) }}
+        availability: >
+          {{ states('sensor.heatpump_setpoints_raw') not in ['unknown', 'unavailable'] }}
+        set_value:
+          # Keep the high byte (Zone 2), replace only the low byte
+          - action: modbus.write_register
+            data:
+              hub: heatpump
+              slave: 1
+              address: 2
+              value: >
+                {{ ((states('sensor.heatpump_setpoints_raw') | int(0)) | bitwise_and(65280)) + (value | int) }}
+          - delay: "00:00:02"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.heatpump_setpoints_raw
+
+switch:
+  - platform: template
+    switches:
+      heatpump_zone1_heating:
+        unique_id: heatpump_zone1_heating
+        friendly_name: HeatPump Zone1 Heating
+        # Bit 1 of reg 0 (mask 0x0002)
+        value_template: >
+          {{ ((states('sensor.heatpump_power_flags_raw') | int(0)) | bitwise_and(2)) > 0 }}
+        availability_template: >
+          {{ states('sensor.heatpump_power_flags_raw') not in ['unknown', 'unavailable'] }}
+        turn_on:
+          - action: modbus.write_register
+            data:
+              hub: heatpump
+              slave: 1
+              address: 0
+              value: >
+                {{ (states('sensor.heatpump_power_flags_raw') | int(0)) | bitwise_or(2) }}
+          - delay: "00:00:02"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.heatpump_power_flags_raw
+        turn_off:
+          - action: modbus.write_register
+            data:
+              hub: heatpump
+              slave: 1
+              address: 0
+              value: >
+                {{ (states('sensor.heatpump_power_flags_raw') | int(0)) | bitwise_and(65533) }}
+          - delay: "00:00:02"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.heatpump_power_flags_raw
